@@ -9,6 +9,7 @@ import Costs from './components/Costs.jsx'
 import TripsPanel from './components/TripsPanel.jsx'
 import { fetchRoute, formatDistance, formatDuration } from './lib/routing.js'
 import { decodeTripFromHash, insertIndexFor, makeId, splitIntoDays } from './lib/tripUtils.js'
+import { loadCurrentTrip, saveCurrentTrip } from './lib/storage.js'
 import { fetchIconicStops } from './lib/suggestions.js'
 import { IconCompass } from './components/icons.jsx'
 
@@ -36,25 +37,34 @@ export default function App() {
   const [routeStatus, setRouteStatus] = useState('idle') // idle | loading | error
   const [routeError, setRouteError] = useState('')
   const [tab, setTab] = useState('stops')
-  // launch | generating | planner. Share links go straight to the planner.
-  const [view, setView] = useState(() =>
-    window.location.hash.includes('#trip=') ? 'planner' : 'launch',
-  )
+  // launch | generating | planner. Share links and an autosaved
+  // in-progress trip go straight to the planner.
+  const [view, setView] = useState(() => {
+    if (window.location.hash.includes('#trip=')) return 'planner'
+    if (loadCurrentTrip()?.stops.length >= 2) return 'planner'
+    return 'launch'
+  })
   const genStartRef = useRef(0)
   const routeRequestRef = useRef(0)
   const [iconic, setIconic] = useState({ status: 'idle', list: [] })
   const [iconicTick, setIconicTick] = useState(0)
   const iconicKeyRef = useRef(null)
 
-  // Load a shared trip from the URL hash on first mount.
+  // Load a shared trip from the URL hash on first mount; otherwise
+  // restore the autosaved working trip.
   useEffect(() => {
-    const shared = decodeTripFromHash(window.location.hash)
+    const shared = decodeTripFromHash(window.location.hash) || loadCurrentTrip()
     if (shared && shared.stops.length) {
       setTripName(shared.name)
-      setStops(shared.stops)
+      setStops(shared.stops.map((s) => ({ ...s, id: s.id || makeId() })))
       if (shared.settings) setSettings({ ...DEFAULT_SETTINGS, ...shared.settings })
     }
   }, [])
+
+  // Autosave the working trip on every change.
+  useEffect(() => {
+    saveCurrentTrip({ name: tripName, stops, settings })
+  }, [tripName, stops, settings])
 
   // Re-route whenever stops change (debounced, stale responses discarded).
   useEffect(() => {

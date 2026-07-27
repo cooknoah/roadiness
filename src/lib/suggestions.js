@@ -65,10 +65,13 @@ function chunk(items, size) {
 // Wikidata, with sitelink counts (how many language editions = how famous).
 // Their page coordinates sit at park centroids, which geosearch can't reach.
 async function fetchParks(signal) {
-  const sparql = `SELECT ?item ?itemLabel ?classLabel ?coord ?sitelinks WHERE {
+  const sparql = `SELECT ?item ?itemLabel ?classLabel ?coord ?sitelinks ?image ?website ?article WHERE {
   VALUES ?class { wd:Q46169 wd:Q34918903 wd:Q893775 wd:Q1093410 }
   ?item wdt:P31 ?class; wdt:P625 ?coord; wikibase:sitelinks ?sitelinks.
   FILTER(?sitelinks >= ${MIN_PARK_SITELINKS})
+  OPTIONAL { ?item wdt:P18 ?image }
+  OPTIONAL { ?item wdt:P856 ?website }
+  OPTIONAL { ?article schema:about ?item; schema:isPartOf <https://en.wikipedia.org/> }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }`
   const res = await fetch(`${WDQS_API}?format=json&query=${encodeURIComponent(sparql)}`, {
@@ -87,6 +90,11 @@ async function fetchParks(signal) {
         lat: parseFloat(m[2]),
         lon: parseFloat(m[1]),
         sitelinks: parseInt(b.sitelinks?.value || '0', 10),
+        image: b.image?.value
+          ? `${b.image.value.replace(/^http:/, 'https:')}?width=480`
+          : null,
+        website: b.website?.value || null,
+        wikiUrl: b.article?.value || null,
       }
     })
     .filter((p) => p && p.name && !/^Q\d+$/.test(p.name))
@@ -153,17 +161,23 @@ export async function fetchIconicStops(route, stops, signal) {
   const withDesc = []
   await inChunks(chunk([...candidates.values()], 50), 5, async (batch) => {
     const data = await wikiGet(
-      { action: 'query', prop: 'description', titles: batch.map((c) => c.title).join('|') },
+      {
+        action: 'query',
+        prop: 'description|pageimages',
+        piprop: 'thumbnail',
+        pithumbsize: '480',
+        pilimit: '50',
+        titles: batch.map((c) => c.title).join('|'),
+      },
       signal,
     )
-    const byTitle = new Map(
-      Object.values(data.query?.pages || {}).map((p) => [p.title, p.description || '']),
-    )
+    const byTitle = new Map(Object.values(data.query?.pages || {}).map((p) => [p.title, p]))
     for (const c of batch) {
-      const d = byTitle.get(c.title) ?? ''
+      const page = byTitle.get(c.title)
+      const d = page?.description ?? ''
       if (d && BORING_DESC.test(d)) continue
       if (/^united states historic place$/i.test(d)) continue // minor NRHP entries
-      withDesc.push({ ...c, description: d })
+      withDesc.push({ ...c, description: d, image: page?.thumbnail?.source || null })
     }
   })
 
@@ -219,6 +233,9 @@ export async function fetchIconicStops(route, stops, signal) {
       offMiles: offMeters / 1609.344,
       alongFrac,
       score: park.sitelinks * 2500, // ~60 sitelinks outranks any landmark
+      image: park.image,
+      wikiUrl: park.wikiUrl,
+      website: park.website,
     })
   }
 
@@ -238,6 +255,9 @@ export async function fetchIconicStops(route, stops, signal) {
       offMiles: offMeters / 1609.344,
       alongFrac,
       score: c.views,
+      image: c.image,
+      wikiUrl: `https://en.wikipedia.org/wiki/${encodeURIComponent(c.title.replace(/ /g, '_'))}`,
+      website: null,
     })
   }
 
