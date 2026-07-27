@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Launch, { GeneratingOverlay } from './components/Launch.jsx'
 import MapView from './components/MapView.jsx'
 import SearchBox from './components/SearchBox.jsx'
 import StopList from './components/StopList.jsx'
@@ -35,6 +36,11 @@ export default function App() {
   const [routeStatus, setRouteStatus] = useState('idle') // idle | loading | error
   const [routeError, setRouteError] = useState('')
   const [tab, setTab] = useState('stops')
+  // launch | generating | planner. Share links go straight to the planner.
+  const [view, setView] = useState(() =>
+    window.location.hash.includes('#trip=') ? 'planner' : 'launch',
+  )
+  const genStartRef = useRef(0)
   const routeRequestRef = useRef(0)
   const [iconic, setIconic] = useState({ status: 'idle', list: [] })
   const [iconicTick, setIconicTick] = useState(0)
@@ -100,6 +106,34 @@ export default function App() {
       })
     return () => controller.abort()
   }, [tab, route, stops, iconicTick])
+
+  const startTrip = useCallback((from, to) => {
+    setTripName(`${from.name.split(',')[0]} to ${to.name.split(',')[0]}`)
+    setStops([
+      { id: makeId(), name: from.name, lat: from.lat, lon: from.lon },
+      { id: makeId(), name: to.name, lat: to.lat, lon: to.lon },
+    ])
+    setTab('suggest') // kicks off the iconic-stops scan while the van drives
+    genStartRef.current = Date.now()
+    setView('generating')
+  }, [])
+
+  const newTrip = useCallback(() => {
+    setStops([])
+    setTripName('My Road Trip')
+    setTab('stops')
+    setView('launch')
+  }, [])
+
+  // Leave the generating screen once the route is in (or failed), but let
+  // the van drive for at least a few seconds — it's the fun part.
+  useEffect(() => {
+    if (view !== 'generating') return
+    if (stops.length < 2 || routeStatus === 'loading') return
+    const remaining = Math.max(0, 3400 - (Date.now() - genStartRef.current))
+    const timer = setTimeout(() => setView('planner'), remaining)
+    return () => clearTimeout(timer)
+  }, [view, routeStatus, stops])
 
   const retryIconic = useCallback(() => {
     iconicKeyRef.current = null
@@ -170,18 +204,26 @@ export default function App() {
     [stops],
   )
 
+  if (view === 'launch') {
+    return <Launch onStart={startTrip} onSkip={() => setView('planner')} />
+  }
+
   return (
     <div className="app">
+      {view === 'generating' && <GeneratingOverlay />}
       <aside className="sidebar">
         <header className="masthead">
           <div className="masthead-badge">
             <span className="badge-route">RT</span>
             <span className="badge-num">66</span>
           </div>
-          <div>
+          <div className="masthead-text">
             <h1 className="wordmark">Roadiness</h1>
             <p className="tagline">plan the drive, love the detours</p>
           </div>
+          <button className="new-trip" onClick={newTrip} title="Start over from the launch page">
+            New trip
+          </button>
         </header>
 
         <input

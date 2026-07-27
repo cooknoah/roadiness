@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { searchPlaces } from '../lib/geocode.js'
 
-export default function SearchBox({ onSelect }) {
+export default function SearchBox({
+  onSelect,
+  placeholder = 'Add a stop — city, park, address…',
+  retainSelection = false,
+  large = false,
+}) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
   const [open, setOpen] = useState(false)
@@ -37,7 +42,7 @@ export default function SearchBox({ onSelect }) {
 
   function pick(place) {
     onSelect(place)
-    setQuery('')
+    setQuery(retainSelection ? place.name : '')
     setResults([])
     setOpen(false)
   }
@@ -46,10 +51,10 @@ export default function SearchBox({ onSelect }) {
     <div className="searchbox">
       <div className="search-input-wrap">
         <input
-          className="search-input"
+          className={`search-input ${large ? 'large' : ''}`}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Add a stop — city, park, address…"
+          placeholder={placeholder}
           aria-label="Search for a place"
           onFocus={() => results.length && setOpen(true)}
         />

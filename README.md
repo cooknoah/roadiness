@@ -29,6 +29,9 @@ Then open http://localhost:5173.
 
 ## Features
 
+- **Launch page** — type just a start and destination; a minivan animation
+  plays while the route and iconic-stop suggestions generate, then you land
+  in the planner with the trip named and the Suggest tab open
 - **Stops** — search places, add stops, drag-to-reorder (or arrow buttons),
   per-leg distance and drive time
 - **Suggest** — surfaces the genuinely iconic sights along your route, in

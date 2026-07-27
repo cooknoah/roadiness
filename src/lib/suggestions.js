@@ -6,16 +6,20 @@
 const WIKI_API = 'https://en.wikipedia.org/w/api.php'
 const WDQS_API = 'https://query.wikidata.org/sparql'
 
-const SAMPLE_POINTS = 26 // geosearch calls per route
 const SEARCH_RADIUS_M = 10000 // geosearch max
-const MIN_VIEWS = 6000 // pageviews over ~60 days to count as "iconic"
+const SAMPLE_SPACING_M = 16000 // one geosearch per ~10 mi of route
+const MAX_SAMPLE_POINTS = 90
+const MIN_VIEWS = 2500 // pageviews over 30 days to count as "iconic"
 const MIN_PARK_SITELINKS = 8 // language editions for a park to count
 const PARK_REACH_METERS = 50000 // parks are worth a bigger detour (~31 mi)
 const MAX_RESULTS = 25
 
-// Wikipedia pages that are places but not road-trip stops.
+// Wikipedia pages that are places but not road-trip stops. Geography and
+// settlement words are anchored to the start of the description so that
+// "Waterfall on the Snoqualmie River in Washington" or "Museum in Kansas
+// City" don't get caught by substring matches.
 const BORING_DESC =
-  /(city|town|village|census-designated|unincorporated community|county in|county seat|u\.s\. (route|highway)|interstate highway|state (route|highway)|neighborhood|suburb|airport|shopping mall|radio station|school|university|company|river in|creek in|reservoir|accident|crash|disaster|massacre|murder|shooting|wildfire|flood)/i
+  /^(city|town|village|hamlet|suburb|neighborhood|census|unincorporated|county|region|metropolitan|megapolitan|u\.s\.|interstate|state (route|highway)|highway|river|creek|stream|valley|mountain range|hills?\b|loam)|accident|crash|disaster|massacre|murder|shooting|wildfire|flood|natural event|school|university|college|radio station|shopping mall|airport|company|headquarters|mansion|residence/i
 
 export function haversineMeters(a, b) {
   const R = 6371000
@@ -49,6 +53,12 @@ async function inChunks(items, size, fn) {
     results.push(...(await Promise.all(items.slice(i, i + size).map(fn))))
   }
   return results
+}
+
+function chunk(items, size) {
+  const out = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
 }
 
 // One query for every US national park / national monument / state park on
@@ -87,7 +97,11 @@ async function fetchParks(signal) {
  * @returns {Promise<Array<{id, name, kind, lat, lon, offMiles, alongFrac, score}>>}
  */
 export async function fetchIconicStops(route, stops, signal) {
-  const searchPts = downsample(route.geometry, SAMPLE_POINTS)
+  const sampleCount = Math.min(
+    MAX_SAMPLE_POINTS,
+    Math.max(8, Math.ceil(route.distanceMeters / SAMPLE_SPACING_M)),
+  )
+  const searchPts = downsample(route.geometry, sampleCount)
   const distPts = downsample(route.geometry, 200)
 
   const nearestOnRoute = (lat, lon) => {
@@ -118,7 +132,7 @@ export async function fetchIconicStops(route, stops, signal) {
           list: 'geosearch',
           gscoord: `${p[0]}|${p[1]}`,
           gsradius: String(SEARCH_RADIUS_M),
-          gslimit: '25',
+          gslimit: '50',
         },
         signal,
       )
@@ -134,39 +148,66 @@ export async function fetchIconicStops(route, stops, signal) {
   })
   if (!candidates.size) throw new Error('Wikipedia search returned nothing')
 
-  // 2. Batch-fetch pageviews + short descriptions to rank and label them.
-  const entries = [...candidates.entries()]
+  // 2a. Descriptions for everyone (cheap, 50 titles per request) — drop the
+  // boring pages and NRHP filler before paying for pageviews.
+  const withDesc = []
+  await inChunks(chunk([...candidates.values()], 50), 5, async (batch) => {
+    const data = await wikiGet(
+      { action: 'query', prop: 'description', titles: batch.map((c) => c.title).join('|') },
+      signal,
+    )
+    const byTitle = new Map(
+      Object.values(data.query?.pages || {}).map((p) => [p.title, p.description || '']),
+    )
+    for (const c of batch) {
+      const d = byTitle.get(c.title) ?? ''
+      if (d && BORING_DESC.test(d)) continue
+      if (/^united states historic place$/i.test(d)) continue // minor NRHP entries
+      withDesc.push({ ...c, description: d })
+    }
+  })
+
+  // 2b. Pageviews to rank by fame. The API only fills ~11 pages per request
+  // no matter how many titles you send, so ask in small batches.
   const enriched = []
-  for (let i = 0; i < entries.length; i += 50) {
-    const batch = entries.slice(i, i + 50)
+  await inChunks(chunk(withDesc, 10), 5, async (batch) => {
     const data = await wikiGet(
       {
         action: 'query',
-        prop: 'pageviews|description',
-        titles: batch.map(([, c]) => c.title).join('|'),
+        prop: 'pageviews',
+        pvipdays: '30',
+        titles: batch.map((c) => c.title).join('|'),
       },
       signal,
     )
     const pages = Object.values(data.query?.pages || {})
     for (const page of pages) {
-      const cand = batch.find(([, c]) => c.title === page.title)?.[1]
+      const cand = batch.find((c) => c.title === page.title)
       if (!cand) continue
       const views = Object.values(page.pageviews || {}).reduce((s, v) => s + (v || 0), 0)
-      enriched.push({ ...cand, views, description: page.description || '' })
+      enriched.push({ ...cand, views })
     }
-  }
+  })
 
   // 3. Keep the famous, non-boring ones that aren't already stops.
   const results = []
   const nameKeys = new Set()
-  const nearAStop = (lat, lon) =>
-    stops.some((s) => haversineMeters([s.lat, s.lon], [lat, lon]) < 3200)
+  // Already visiting: physically close to a stop, or the stop IS the place
+  // (e.g. destination "Yellowstone National Park" vs the park's own entry,
+  // whose centroid can sit 25+ miles from the entrance coordinates).
+  const alreadyVisiting = (name, lat, lon) =>
+    stops.some((s) => {
+      if (haversineMeters([s.lat, s.lon], [lat, lon]) < 3200) return true
+      const a = s.name.toLowerCase()
+      const b = name.toLowerCase()
+      return a.includes(b) || b.includes(a)
+    })
 
   // Parks first — they're the headliners and win name collisions.
   for (const park of await parksPromise) {
     const { offMeters, alongFrac } = nearestOnRoute(park.lat, park.lon)
     if (offMeters > PARK_REACH_METERS) continue
-    if (nearAStop(park.lat, park.lon)) continue
+    if (alreadyVisiting(park.name, park.lat, park.lon)) continue
     if (nameKeys.has(park.name.toLowerCase())) continue
     nameKeys.add(park.name.toLowerCase())
     results.push({
@@ -185,7 +226,7 @@ export async function fetchIconicStops(route, stops, signal) {
     if (c.views < MIN_VIEWS) continue
     if (c.description && BORING_DESC.test(c.description)) continue
     if (nameKeys.has(c.title.toLowerCase())) continue
-    if (nearAStop(c.lat, c.lon)) continue
+    if (alreadyVisiting(c.title, c.lat, c.lon)) continue
 
     const { offMeters, alongFrac } = nearestOnRoute(c.lat, c.lon)
     results.push({
