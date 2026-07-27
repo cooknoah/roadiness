@@ -4,6 +4,7 @@ import { fetchPlacePhotos, wikiTitleFromUrl } from '../lib/suggestions.js'
 export default function SuggestPanel({ status, iconicStops, hasRoute, stopCount, addedIds, onAddPoi, onRetry }) {
   const [expandedId, setExpandedId] = useState(null)
   const [photoIdx, setPhotoIdx] = useState(0)
+  const [lightboxPoi, setLightboxPoi] = useState(null)
   const photoCacheRef = useRef(new Map()) // poi.id -> string[] of photo urls
   const [, bump] = useState(0)
 
@@ -128,6 +129,7 @@ export default function SuggestPanel({ status, iconicStops, hasRoute, stopCount,
                     name={poi.name}
                     idx={photoIdx}
                     onStep={(dir) => setPhotoIdx((n) => n + dir)}
+                    onOpen={() => setLightboxPoi(poi)}
                   />
                   <div className="poi-links">
                     {poi.website && (
@@ -157,11 +159,20 @@ export default function SuggestPanel({ status, iconicStops, hasRoute, stopCount,
           )
         })}
       </ul>
+      {lightboxPoi && (
+        <Lightbox
+          photos={photoCacheRef.current.get(lightboxPoi.id) ?? (lightboxPoi.image ? [lightboxPoi.image] : [])}
+          name={lightboxPoi.name}
+          idx={photoIdx}
+          onStep={(dir) => setPhotoIdx((n) => n + dir)}
+          onClose={() => setLightboxPoi(null)}
+        />
+      )}
     </div>
   )
 }
 
-function PhotoCarousel({ photos, name, idx, onStep }) {
+function PhotoCarousel({ photos, name, idx, onStep, onOpen }) {
   if (!photos.length) return null
   const current = ((idx % photos.length) + photos.length) % photos.length
   return (
@@ -171,7 +182,8 @@ function PhotoCarousel({ photos, name, idx, onStep }) {
         src={photos[current]}
         alt={`${name} — photo ${current + 1} of ${photos.length}`}
         loading="lazy"
-        onClick={() => photos.length > 1 && onStep(1)}
+        title="Click to enlarge"
+        onClick={onOpen}
       />
       {photos.length > 1 && (
         <>
@@ -196,6 +208,76 @@ function PhotoCarousel({ photos, name, idx, onStep }) {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+// Try a higher-resolution variant of a Wikipedia thumb for the big view;
+// the <img> falls back to the original src if this 404s.
+function upsized(src, px = 1200) {
+  return src.replace(/\/(\d+)px-([^/]+)$/, `/${px}px-$2`)
+}
+
+function Lightbox({ photos, name, idx, onStep, onClose }) {
+  const [failedLarge, setFailedLarge] = useState(() => new Set())
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose()
+      if (e.key === 'ArrowLeft') onStep(-1)
+      if (e.key === 'ArrowRight') onStep(1)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, onStep])
+
+  if (!photos.length) return null
+  const current = ((idx % photos.length) + photos.length) % photos.length
+  const src = photos[current]
+  const large = upsized(src)
+
+  return (
+    <div className="lightbox-backdrop" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="lightbox-frame" onClick={(e) => e.stopPropagation()}>
+        <button className="lightbox-close" onClick={onClose} aria-label="Close photo viewer">
+          ×
+        </button>
+        <img
+          className="lightbox-photo"
+          src={failedLarge.has(current) ? src : large}
+          alt={`${name} — photo ${current + 1} of ${photos.length}`}
+          onError={() =>
+            setFailedLarge((prev) => {
+              if (prev.has(current)) return prev
+              const next = new Set(prev)
+              next.add(current)
+              return next
+            })
+          }
+        />
+        {photos.length > 1 && (
+          <>
+            <button
+              className="carousel-arrow left"
+              onClick={() => onStep(-1)}
+              aria-label="Previous photo"
+            >
+              ‹
+            </button>
+            <button
+              className="carousel-arrow right"
+              onClick={() => onStep(1)}
+              aria-label="Next photo"
+            >
+              ›
+            </button>
+          </>
+        )}
+        <p className="lightbox-caption">
+          {name}
+          {photos.length > 1 ? ` · ${current + 1} / ${photos.length}` : ''}
+        </p>
+      </div>
     </div>
   )
 }
