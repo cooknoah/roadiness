@@ -29,16 +29,17 @@ function FitBounds({ stops, geometry }) {
   return null
 }
 
-function breakIcon(kind) {
-  return L.divIcon({
+const STAR_SVG = `<svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5-5.9-3.2-5.9 3.2 1.2-6.5L2.5 9.4l6.6-.9z" fill="#e8a33c" stroke="#22301f" stroke-width="1.4" stroke-linejoin="round"/></svg>`
+
+const starIcon = () =>
+  L.divIcon({
     className: '',
-    html: `<div class="map-break ${kind}">${kind === 'overnight' ? '🌙' : '☕'}</div>`,
+    html: `<div class="map-star">${STAR_SVG}</div>`,
     iconSize: [26, 26],
     iconAnchor: [13, 13],
   })
-}
 
-export default function MapView({ stops, route, loading, breaks = [] }) {
+export default function MapView({ stops, route, loading, suggestions = [] }) {
   return (
     <div className={`map-container ${loading ? 'map-loading' : ''}`}>
       <MapContainer center={USA_CENTER} zoom={4} className="leaflet-root" zoomControl={false}>
@@ -58,11 +59,10 @@ export default function MapView({ stops, route, loading, breaks = [] }) {
             />
           </>
         )}
-        {breaks.map((br) => (
-          <Marker key={br.id} position={[br.lat, br.lon]} icon={breakIcon(br.kind)}>
+        {suggestions.map((poi) => (
+          <Marker key={poi.id} position={[poi.lat, poi.lon]} icon={starIcon()}>
             <Tooltip direction="top" offset={[0, -16]}>
-              {br.kind === 'overnight' ? 'Overnight stop' : 'Stretch & eat'} — Day {br.day},{' '}
-              {br.clockLabel}
+              {poi.name} — {poi.kind}
             </Tooltip>
           </Marker>
         ))}

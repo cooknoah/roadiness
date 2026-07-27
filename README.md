@@ -22,6 +22,8 @@ Then open http://localhost:5173.
 - **OSRM** (public demo server) for driving routes — wrapped in
   `src/lib/routing.js` so the provider can be swapped (Mapbox/Google) later
 - **Nominatim** for place search (`src/lib/geocode.js`)
+- **Wikipedia + Wikidata APIs** for iconic-stop suggestions
+  (`src/lib/suggestions.js`)
 - **localStorage** for saved trips; share links encode the whole trip in the
   URL hash (`src/lib/tripUtils.js`)
 
@@ -29,10 +31,11 @@ Then open http://localhost:5173.
 
 - **Stops** — search places, add stops, drag-to-reorder (or arrow buttons),
   per-leg distance and drive time
-- **Suggest** — the trip drafts itself: rest/meal breaks every ~2.5 driving
-  hours and overnight stops at your daily limit, each with real nearby
-  places (Eat / See / Sleep via the Overpass API) you can add with one tap;
-  added places slot into the correct position on the route
+- **Suggest** — surfaces the genuinely iconic sights along your route, in
+  driving order: national/state parks and monuments from Wikidata (ranked
+  by language-edition count) plus famous roadside landmarks from Wikipedia
+  geosearch (ranked by pageviews). One tap adds a sight, slotted into the
+  correct position on the route; suggestions show as gold stars on the map
 - **Days** — set max driving hours per day; the trip auto-splits into days,
   flagging legs longer than the limit
 - **Costs** — fuel (MPG × gas price), lodging per night, food per day, with a

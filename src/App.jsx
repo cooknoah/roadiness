@@ -8,7 +8,8 @@ import Costs from './components/Costs.jsx'
 import TripsPanel from './components/TripsPanel.jsx'
 import { fetchRoute, formatDistance, formatDuration } from './lib/routing.js'
 import { decodeTripFromHash, insertIndexFor, makeId, splitIntoDays } from './lib/tripUtils.js'
-import { generateBreaks } from './lib/suggestions.js'
+import { fetchIconicStops } from './lib/suggestions.js'
+import { IconCompass } from './components/icons.jsx'
 
 const DEFAULT_SETTINGS = {
   maxHours: 6,
@@ -35,6 +36,9 @@ export default function App() {
   const [routeError, setRouteError] = useState('')
   const [tab, setTab] = useState('stops')
   const routeRequestRef = useRef(0)
+  const [iconic, setIconic] = useState({ status: 'idle', list: [] })
+  const [iconicTick, setIconicTick] = useState(0)
+  const iconicKeyRef = useRef(null)
 
   // Load a shared trip from the URL hash on first mount.
   useEffect(() => {
@@ -71,6 +75,36 @@ export default function App() {
     }, 350)
     return () => clearTimeout(timer)
   }, [stops])
+
+  // Fetch iconic sights when the Suggest tab is open. Keyed by endpoints +
+  // coarse route length so adding an on-route sight doesn't refetch, but a
+  // genuinely different route does.
+  useEffect(() => {
+    if (tab !== 'suggest' || !route || stops.length < 2) return
+    const first = stops[0]
+    const last = stops[stops.length - 1]
+    const key = `${first.lat},${first.lon}|${last.lat},${last.lon}|${Math.round(route.distanceMeters / 50000)}`
+    if (iconicKeyRef.current === key) return
+    iconicKeyRef.current = key
+    const controller = new AbortController()
+    setIconic({ status: 'loading', list: [] })
+    fetchIconicStops(route, stops, controller.signal)
+      .then((list) => setIconic({ status: 'ready', list }))
+      .catch((err) => {
+        if (err.name === 'AbortError') {
+          iconicKeyRef.current = null
+          return
+        }
+        iconicKeyRef.current = null
+        setIconic({ status: 'error', list: [] })
+      })
+    return () => controller.abort()
+  }, [tab, route, stops, iconicTick])
+
+  const retryIconic = useCallback(() => {
+    iconicKeyRef.current = null
+    setIconicTick((n) => n + 1)
+  }, [])
 
   const addStop = useCallback((place) => {
     setStops((prev) => [
@@ -131,10 +165,6 @@ export default function App() {
 
   const days = route ? splitIntoDays(stops, route.legs, settings.maxHours) : []
 
-  const breaks = useMemo(
-    () => (route ? generateBreaks(route, stops, settings) : []),
-    [route, stops, settings],
-  )
   const addedPoiIds = useMemo(
     () => new Set(stops.map((s) => s.poiId).filter(Boolean)),
     [stops],
@@ -200,7 +230,7 @@ export default function App() {
             <>
               <SearchBox onSelect={addStop} />
               {routeStatus === 'error' && (
-                <p className="route-error">⚠ {routeError}</p>
+                <p className="route-error">{routeError}</p>
               )}
               <StopList
                 stops={stops}
@@ -212,18 +242,20 @@ export default function App() {
               />
               {stops.length >= 2 && (
                 <button className="btn suggest-cta" onClick={() => setTab('suggest')}>
-                  ✨ Suggest my trip
+                  <IconCompass /> Suggest my trip
                 </button>
               )}
             </>
           )}
           {tab === 'suggest' && (
             <SuggestPanel
-              breaks={breaks}
+              status={iconic.status}
+              iconicStops={iconic.list}
               hasRoute={!!route}
               stopCount={stops.length}
               addedIds={addedPoiIds}
               onAddPoi={addPoi}
+              onRetry={retryIconic}
             />
           )}
           {tab === 'days' && (
@@ -259,7 +291,11 @@ export default function App() {
           stops={stops}
           route={route}
           loading={routeStatus === 'loading'}
-          breaks={tab === 'suggest' ? breaks : []}
+          suggestions={
+            tab === 'suggest' && iconic.status === 'ready'
+              ? iconic.list.filter((p) => !addedPoiIds.has(p.id))
+              : []
+          }
         />
       </main>
     </div>

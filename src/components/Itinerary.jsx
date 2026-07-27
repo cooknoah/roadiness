@@ -49,7 +49,7 @@ export default function Itinerary({ days, hasRoute, stopCount, maxHours, onMaxHo
               )}
               {d.overLimit && (
                 <p className="day-warning">
-                  ⚠ This single leg is longer than your daily limit — consider adding a stop
+                  This single leg is longer than your daily limit — consider adding a stop
                   between these two.
                 </p>
               )}
