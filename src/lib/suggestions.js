@@ -19,7 +19,7 @@ const MAX_RESULTS = 25
 // "Waterfall on the Snoqualmie River in Washington" or "Museum in Kansas
 // City" don't get caught by substring matches.
 const BORING_DESC =
-  /^(city|town|village|hamlet|suburb|neighborhood|census|unincorporated|county|region|metropolitan|megapolitan|u\.s\.|interstate|state (route|highway)|highway|river|creek|stream|valley|mountain range|hills?\b|loam)|accident|crash|disaster|massacre|murder|shooting|wildfire|flood|natural event|school|university|college|radio station|shopping mall|airport|company|headquarters|mansion|residence/i
+  /^(city|town|village|hamlet|suburb|neighborhood|census|unincorporated|county|region|metropolitan|megapolitan|home-rule|consolidated|u\.s\.|interstate|state (route|highway)|highway|river|creek|stream|valley|mountain range|hills?\b|loam|former (stadium|arena)|demolished)|accident|crash|disaster|massacre|murder|shooting|wildfire|flood|natural event|school|university|college|radio station|shopping mall|airport|company|headquarters|mansion|residence/i
 
 export function haversineMeters(a, b) {
   const R = 6371000
@@ -265,6 +265,41 @@ export async function fetchIconicStops(route, stops, signal) {
     .sort((a, b) => b.score - a.score)
     .slice(0, MAX_RESULTS)
     .sort((a, b) => a.alongFrac - b.alongFrac)
+}
+
+// Files on Wikipedia pages that aren't photos of the place.
+const NON_PHOTO_FILE = /\.svg$|map|logo|icon|flag|seal|locator|coat|banner|crest|diagram|chart/i
+
+/**
+ * Up to 3 real photos from a place's Wikipedia page media list.
+ * @param {string} title - Wikipedia page title (URL-style, underscores ok)
+ * @returns {Promise<string[]>}
+ */
+export async function fetchPlacePhotos(title, signal) {
+  const res = await fetch(
+    `https://en.wikipedia.org/api/rest_v1/page/media-list/${encodeURIComponent(title)}`,
+    { signal },
+  )
+  if (!res.ok) throw new Error(`Media list request failed (${res.status})`)
+  const data = await res.json()
+  const photos = []
+  for (const item of data.items || []) {
+    if (item.type !== 'image') continue
+    if (NON_PHOTO_FILE.test(item.title || '')) continue
+    // Take the largest variant the API offers — rewriting to a bigger
+    // width 404s when the source file is smaller.
+    let src = item.srcset?.[item.srcset.length - 1]?.src
+    if (!src) continue
+    if (src.startsWith('//')) src = `https:${src}`
+    photos.push(src)
+    if (photos.length >= 3) break
+  }
+  return photos
+}
+
+export function wikiTitleFromUrl(wikiUrl) {
+  const m = /\/wiki\/(.+)$/.exec(wikiUrl || '')
+  return m ? decodeURIComponent(m[1]) : null
 }
 
 function capitalize(s) {

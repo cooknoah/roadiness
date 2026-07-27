@@ -1,7 +1,37 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { fetchPlacePhotos, wikiTitleFromUrl } from '../lib/suggestions.js'
 
 export default function SuggestPanel({ status, iconicStops, hasRoute, stopCount, addedIds, onAddPoi, onRetry }) {
   const [expandedId, setExpandedId] = useState(null)
+  const [photoIdx, setPhotoIdx] = useState(0)
+  const photoCacheRef = useRef(new Map()) // poi.id -> string[] of photo urls
+  const [, bump] = useState(0)
+
+  useEffect(() => setPhotoIdx(0), [expandedId])
+
+  // Lazily fetch up to 3 photos for the expanded place, once.
+  useEffect(() => {
+    const poi = iconicStops.find((p) => p.id === expandedId)
+    if (!poi || photoCacheRef.current.has(poi.id)) return
+    const fallback = poi.image ? [poi.image] : []
+    const title = wikiTitleFromUrl(poi.wikiUrl)
+    if (!title) {
+      photoCacheRef.current.set(poi.id, fallback)
+      return
+    }
+    const controller = new AbortController()
+    fetchPlacePhotos(title, controller.signal)
+      .then((photos) => {
+        photoCacheRef.current.set(poi.id, photos.length ? photos : fallback)
+        bump((n) => n + 1)
+      })
+      .catch((err) => {
+        if (err.name === 'AbortError') return
+        photoCacheRef.current.set(poi.id, fallback)
+        bump((n) => n + 1)
+      })
+    return () => controller.abort()
+  }, [expandedId, iconicStops])
   if (!hasRoute) {
     return (
       <div className="empty-state">
@@ -93,14 +123,12 @@ export default function SuggestPanel({ status, iconicStops, hasRoute, stopCount,
               </div>
               {open && (
                 <div className="poi-expand">
-                  {poi.image && (
-                    <img
-                      className="poi-photo"
-                      src={poi.image}
-                      alt={poi.name}
-                      loading="lazy"
-                    />
-                  )}
+                  <PhotoCarousel
+                    photos={photoCacheRef.current.get(poi.id) ?? (poi.image ? [poi.image] : [])}
+                    name={poi.name}
+                    idx={photoIdx}
+                    onStep={(dir) => setPhotoIdx((n) => n + dir)}
+                  />
                   <div className="poi-links">
                     {poi.website && (
                       <a
@@ -129,6 +157,45 @@ export default function SuggestPanel({ status, iconicStops, hasRoute, stopCount,
           )
         })}
       </ul>
+    </div>
+  )
+}
+
+function PhotoCarousel({ photos, name, idx, onStep }) {
+  if (!photos.length) return null
+  const current = ((idx % photos.length) + photos.length) % photos.length
+  return (
+    <div className="poi-carousel">
+      <img
+        className="poi-photo"
+        src={photos[current]}
+        alt={`${name} — photo ${current + 1} of ${photos.length}`}
+        loading="lazy"
+        onClick={() => photos.length > 1 && onStep(1)}
+      />
+      {photos.length > 1 && (
+        <>
+          <button
+            className="carousel-arrow left"
+            onClick={() => onStep(-1)}
+            aria-label="Previous photo"
+          >
+            ‹
+          </button>
+          <button
+            className="carousel-arrow right"
+            onClick={() => onStep(1)}
+            aria-label="Next photo"
+          >
+            ›
+          </button>
+          <div className="carousel-dots" aria-hidden="true">
+            {photos.map((_, i) => (
+              <span key={i} className={`dot ${i === current ? 'active' : ''}`} />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
